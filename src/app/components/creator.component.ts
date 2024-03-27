@@ -35,6 +35,12 @@ export class SurveyCreatorComponent implements OnInit, AfterViewInit {
     creator.JSON = json;
 
 
+    const fullNameExists = creator.survey.getAllQuestions(false, false, true).some(q => q.getType() === "fullname");
+    
+    if(fullNameExists){
+          creator.toolbox.removeItem("fullname");
+    }
+
     for (const type of isUniqueToolbox) {
       const toolboxCustom = EnumSurveyCustom[type as keyof typeof EnumSurveyCustom]
       creator.toolbox.addItem(toolboxCustom)
@@ -44,7 +50,9 @@ export class SurveyCreatorComponent implements OnInit, AfterViewInit {
     creator.onQuestionAdded.add((_, options) => {
       const questionType: string = options.question.getType();
 
-      if (isUniqueToolbox.includes(questionType)) {
+      if (isUniqueToolbox.includes(questionType) && _.survey.getAllQuestions(false, false, true).some(q => q.getType() === questionType)) {
+        console.log({questionType})
+        // options.question.delete();
         creator.toolbox.removeItem(questionType);
       }
     });
