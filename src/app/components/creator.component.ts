@@ -1,84 +1,135 @@
-import { addFullNameCollection, EnumSurveyCustom, isUniqueToolbox } from './customs-component/customs-collection.component';
-import { AfterViewInit, Component, ElementRef, OnInit, Renderer2 } from '@angular/core';
-import { ComponentCollection, Model, Serializer, surveyLocalization } from 'survey-core';
-import { IQuestionToolboxItem, QuestionConvertMode, settings, SurveyCreatorModel } from 'survey-creator-core';
-import { json } from '../survey';
+import { Action, ItemValue, Model, QuestionFactory } from 'survey-core';
+import { CommentBrick, FlatSurvey, IDocOptions, IPdfBrick, SurveyHelper, SurveyPDF, TextBrick } from 'survey-pdf';
+import { Component, OnInit } from '@angular/core';
+import { json, surveyData, surveyJson } from '../survey';
+import { SurveyCreatorModel } from 'survey-creator-core';
 import 'survey-core/survey.i18n';
 import 'survey-creator-core/survey-creator-core.i18n';
 
-settings.questionConvertMode = QuestionConvertMode.CompatibleTypes;
+enum Mode {
+  EDIT = 'edit',
+  DISPLAY = 'display'
+};
+
+const hexaColors = {
+  white: '#ffffff'
+};
+
+const otherChoiceText = 'Other (describe): ____________________________________';
 
 @Component({
   selector: "component-survey-creator",
   templateUrl: "./creator.component.html",
   styleUrls: ["./creator.component.css"],
 })
-export class SurveyCreatorComponent implements OnInit, AfterViewInit {
-  public model?: SurveyCreatorModel;
-  public model2!: Model;
+export class SurveyCreatorComponent implements OnInit {
+  surveyModel!: Model;
+  surveyCreatorModel!: SurveyCreatorModel;
 
-  constructor(private elementRef: ElementRef, private renderer: Renderer2) {}
-  
   ngOnInit() {
-    addFullNameCollection();
-
-    const creator = new SurveyCreatorModel({
+    const survey = new Model(surveyJson);
+    const creatorOptions = {
       showLogicTab: true,
-      showJSONEditorTab: true,
-      pageEditMode: "bypage",
-    });
-    
-    creator.isAutoSave = true;
-    creator.toolbox.allowExpandMultipleCategories = true;
-    creator.toolbox.showCategoryTitles = true;
+      isAutoSave: true
+    };
 
+    const creator = new SurveyCreatorModel(creatorOptions);
+
+    const downloadPdfAction = new Action({
+      id: "pdf-export-edit-mode",
+      title: "Save as PDF Survey creator",
+      action: () => savePdf(json, Mode.EDIT)
+    });
+    creator.toolbarItems.unshift(downloadPdfAction);
     creator.JSON = json;
+    this.surveyCreatorModel = creator;
 
-
-    const fullNameExists = creator.survey.getAllQuestions(false, false, true).some(q => q.getType() === "fullname");
-    
-    if(fullNameExists){
-          creator.toolbox.removeItem("fullname");
-    }
-
-    for (const type of isUniqueToolbox) {
-      const toolboxCustom = EnumSurveyCustom[type as keyof typeof EnumSurveyCustom]
-      creator.toolbox.addItem(toolboxCustom)
-    }
-    
-
-    creator.onQuestionAdded.add((_, options) => {
-      const questionType: string = options.question.getType();
-
-      if (isUniqueToolbox.includes(questionType) && _.survey.getAllQuestions(false, false, true).some(q => q.getType() === questionType)) {
-        console.log({questionType})
-        // options.question.delete();
-        creator.toolbox.removeItem(questionType);
-      }
+    survey.addNavigationItem({
+      id: "pdf-export-display-mode",
+      title: "Save as PDF survey",
+      action: () => savePdf(survey.data)
     });
 
-
-    creator.onElementDeleting.add((_, options) => {
-      const questionType: string = options.element.getType();
-
-      if (isUniqueToolbox.includes(questionType)) {
-
-        const item: IQuestionToolboxItem = creator.toolbox.getItemByName(questionType);
-        const toolboxCustom = EnumSurveyCustom[questionType as keyof typeof EnumSurveyCustom]
-
-        if(!item) {
-          creator.toolbox.addItem(toolboxCustom)
-        }
-      }
-    });
-
-    this.model = creator;
-  }
-
-  ngAfterViewInit(): void {
-    const elementLicence = this.elementRef.nativeElement.querySelector('.svc-creator__banner');
-    if (elementLicence) {
-      this.renderer.setStyle(elementLicence, 'display', 'none');
-    }
+    survey.data = surveyData;
+    this.surveyModel = survey;
   }
 }
+
+const savePdf = function (surveyData: any, mode: Mode = Mode.DISPLAY) {
+  console.log({ surveyData })
+  const pdfWidth = !!surveyData && surveyData.pdfWidth ? surveyData.pdfWidth : 210;
+  const pdfHeight = !!surveyData && surveyData.pdfHeight ? surveyData.pdfHeight : 297;
+  const a4FormatMargin = 25.4;
+
+  // FlatSurvey.QUES_GAP_VERT_SCALE = mode === Mode.EDIT ? 0.0 : 1.0;
+
+  const pdfDocOptions: IDocOptions = {
+    format: [pdfWidth, pdfHeight],
+    fontSize: 12,
+    fontName: 'Helvetica',
+    margins: {
+      top: a4FormatMargin,
+      left: a4FormatMargin,
+      right: a4FormatMargin,
+      bot: a4FormatMargin
+    }
+  };
+
+  const surveyPdf = new SurveyPDF(surveyJson, pdfDocOptions);
+  surveyPdf.data = surveyData;
+  surveyPdf.showInvisibleElements = true;
+  surveyPdf.mode = 'display';
+
+  surveyPdf.onRenderQuestion.add(async (survey, options) => {
+    const question = options.question;
+
+    if (question.getType() === 'boolean') {
+      const radioQuestion = QuestionFactory.Instance.createQuestion("radiogroup", `${question.no ?? ''} ${question.title}`);
+
+      radioQuestion.choices = [
+        new ItemValue(true, question.locLabelTrue?.values?.en ?? question.locLabelTrue?.values?.default ?? "Yes"),
+        new ItemValue(false, question.locLabelFalse?.values?.en ?? question.locLabelFalse?.values?.default ?? "No")
+      ];
+
+      const flatRadiogroup = options.repository.create(survey, radioQuestion, options.controller, "radiogroup");
+
+      const dropdownBrick = options.bricks.shift();
+
+      if (dropdownBrick) {
+        const point = SurveyHelper.createPoint(dropdownBrick, true, true);
+
+        const radioBricks = await flatRadiogroup.generateFlats(point);
+
+        options.bricks.forEach(blocsBriques => {
+          const briques = blocsBriques.unfold();
+          if (briques.length > 1) {
+            briques.forEach(brique => {
+              if (brique instanceof TextBrick) {
+                (brique as any).text = otherChoiceText;
+                brique.yTop += 35;
+                brique.formBorderColor = hexaColors.white;
+              } else if (brique && brique instanceof CommentBrick) {
+                // brique.formBorderColor = hexaColors.white;
+                brique.formBorderColor = 'red';
+                brique.xLeft -= 5;
+                if (mode === Mode.DISPLAY) {
+                  brique.yTop += 20;
+                  brique.yBot += 15;
+                }
+
+                // if (mode === Mode.EDIT) {
+                //   brique.yTop -= 4;
+                //   brique.yBot -= 1;
+                // }
+              }
+            });
+          }
+        });
+
+        options.bricks.push(...radioBricks);
+      }
+    }
+  });
+
+  surveyPdf.save();
+};
